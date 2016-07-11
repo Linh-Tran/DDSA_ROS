@@ -1047,7 +1047,7 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
     sim_mgr.addModel("collection_disk", "collection_disk", 0, 0, 0, collection_disk_radius);
 
     int n_rovers_created = 0;
-    int n_rovers = 3;
+    int n_rovers = 1; // Temp change to 1 from 3
     if (ui.final_radio_button->isChecked()) n_rovers = 6;
 
     QProgressDialog progress_dialog;
@@ -1069,6 +1069,7 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
     progress_dialog.setValue((++n_rovers_created)*100.0f/n_rovers);
     qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
 
+    /*
     emit sendInfoLogMessage("Adding rover aeneas...");
     return_msg = sim_mgr.addRover("aeneas", -1, 0, 0);
     emit sendInfoLogMessage(return_msg);
@@ -1087,6 +1088,7 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
    emit sendInfoLogMessage("Starting rover node for ajax...");
    return_msg = sim_mgr.startRoverNode("ajax");
    emit sendInfoLogMessage(return_msg);
+    */
 
    progress_dialog.setValue((++n_rovers_created)*100.0f/n_rovers);
    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);

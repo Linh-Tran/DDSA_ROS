@@ -22,6 +22,8 @@
 #include <ros/ros.h>
 #include <signal.h>
 
+#include "DDSAController.h"
+
 using namespace std;
 
 //Random number generator
@@ -89,6 +91,13 @@ void publishStatusTimerEventHandler(const ros::TimerEvent& event);
 void targetsCollectedHandler(const std_msgs::Int16::ConstPtr& message);
 void killSwitchTimerEventHandler(const ros::TimerEvent& event);
 
+// Utility functions
+int roverNameToIndex(string name);
+
+// Create the DDSA Controller
+DDSAController ddsa_controller;
+geometry_msgs::Pose2D spiralPosition;
+
 int main(int argc, char **argv) {
 
     gethostname(host, sizeof (host));
@@ -138,9 +147,16 @@ int main(int argc, char **argv) {
     //killSwitchTimer = mNH.createTimer(ros::Duration(killSwitchTimeout), killSwitchTimerEventHandler);
     stateMachineTimer = mNH.createTimer(ros::Duration(mobilityLoopTimeStep), mobilityStateMachine);
 
+    
+    
+    int robotNumber = roverNameToIndex(publishedName);
+    ddsa_controller.generatePattern(4, 3, robotNumber);
+
     std_msgs::String msg;
-    msg.data = "Log Started";
+    msg.data = "Spiral Pattern: " + ddsa_controller.getPath();
     infoLogPublisher.publish(msg);
+    
+
     ros::spin();
     
     return EXIT_SUCCESS;
@@ -148,6 +164,8 @@ int main(int argc, char **argv) {
 
 void mobilityStateMachine(const ros::TimerEvent&) {
     std_msgs::String stateMachineMsg;
+
+    float angle_tol = 0.1;
     
     if (currentMode == 2 || currentMode == 3) { //Robot is in automode
 
@@ -158,7 +176,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 			case STATE_MACHINE_TRANSFORM: {
 				stateMachineMsg.data = "TRANSFORMING";
 				//If angle between current and goal is significant
-				if (fabs(angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta)) > 0.1) {
+				if (fabs(angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta)) > angle_tol) { // Radians
 					stateMachineState = STATE_MACHINE_ROTATE; //rotate
 				}
 				//If goal has not yet been reached
@@ -179,17 +197,30 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 					//Otherwise, reset target and select new random uniform heading
 					else {
 						targetDetected.data = -1;
-						goalLocation.theta = rng->uniformReal(0, 2 * M_PI);
+						goalLocation.theta = rng->uniformReal(0, 2 * M_PI);  // What is this doing ???? <-----
 					}
 				}
 				//Otherwise, assign a new goal
 				else {
-					 //select new heading from Gaussian distribution around current heading
-					goalLocation.theta = rng->gaussian(currentLocation.theta, 0.25);
-					
-					//select new position 50 cm from current location
-					goalLocation.x = currentLocation.x + (0.5 * cos(goalLocation.theta));
-					goalLocation.y = currentLocation.y + (0.5 * sin(goalLocation.theta));
+				  
+				  // DDSA Controller needs to know the current location in order to calculate the next goal state
+				  ddsa_controller.setX(currentLocation.x);
+				  ddsa_controller.setY(currentLocation.y);
+
+				  //select new goal state that follows the spiral pattern
+				  GoalState gs = ddsa_controller.calcNextGoalState();
+				  
+				  goalLocation.theta = gs.yaw;
+				  goalLocation.x = gs.x;
+				  goalLocation.y = gs.y;
+
+				  std_msgs::String msg;
+				  msg.data = "x: " + boost::lexical_cast<std::string>(gs.x) + ", " 
+				     + "y: " + boost::lexical_cast<std::string>(gs.y) + ", "
+				     + "yaw: " + boost::lexical_cast<std::string>(gs.yaw) 
+				     + " Direction: " + gs.dir;
+				   infoLogPublisher.publish(msg);
+				  
 				}
 				
 				//Purposefully fall through to next case without breaking
@@ -198,20 +229,32 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 			//Calculate angle between currentLocation.theta and goalLocation.theta
 			//Rotate left or right depending on sign of angle
 			//Stay in this state until angle is minimized
-			case STATE_MACHINE_ROTATE: {
-				stateMachineMsg.data = "ROTATING";
-			    if (angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta) > 0.1) {
-					setVelocity(0.0, 0.2); //rotate left
-			    }
-			    else if (angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta) < -0.1) {
-					setVelocity(0.0, -0.2); //rotate right
-				}
-				else {
-					setVelocity(0.0, 0.0); //stop
-					stateMachineState = STATE_MACHINE_TRANSLATE; //move to translate step
-				}
-			    break;
-			}
+		case STATE_MACHINE_ROTATE: {
+		  stateMachineMsg.data = "ROTATING";
+		  float p_k = 1.0; 
+		  float angle_error = angles::shortest_angular_distance(currentLocation.theta, goalLocation.theta);
+		  if (fabs(angle_error) > angle_tol) {
+
+		    float command_vel = p_k*angle_error;
+		    //std_msgs::String msg;
+		    //msg.data = "Angle Error: " + boost::lexical_cast<std::string>(angle_error) 
+		    //  + "Command Vel: " + boost::lexical_cast<std::string>(command_vel); 
+		    // infoLogPublisher.publish(msg);
+
+		    setVelocity(0.0, command_vel); //rotate
+		  }
+		  else {
+		    
+		    //std_msgs::String msg;
+		    //msg.data = "Desired Angle Reached: " + boost::lexical_cast<std::string>(angle_error);
+		    //infoLogPublisher.publish(msg);
+		    
+		    setVelocity(0.0, 0.0); //stop
+		    stateMachineState = STATE_MACHINE_TRANSLATE; //move to translate step
+		    
+		  }
+		  break;
+		}
 			
 			//Calculate angle between currentLocation.x/y and goalLocation.x/y
 			//Drive forward
@@ -242,8 +285,11 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 
     // publish state machine string for user, only if it has changed, though
     if (strcmp(stateMachineMsg.data.c_str(), prev_state_machine) != 0) {
-        stateMachinePublish.publish(stateMachineMsg);
-        sprintf(prev_state_machine, "%s", stateMachineMsg.data.c_str());
+
+      //infoLogPublisher.publish(stateMachineMsg);
+      
+      stateMachinePublish.publish(stateMachineMsg);
+      sprintf(prev_state_machine, "%s", stateMachineMsg.data.c_str());
     }
 }
 
@@ -267,14 +313,25 @@ void setVelocity(double linearVel, double angularVel)
 void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
 
 	//if this is the goal target
-	if (message->tags.data[0] == 256) {
-		//if we were returning with a target
-	    if (targetDetected.data != -1) {
-			//publish to scoring code
-			targetDropOffPublish.publish(message->image);
-			targetDetected.data = -1;
-	    }
-	}
+  if (message->tags.data[0] == 256) {
+    //if we were returning with a target
+    if (targetDetected.data != -1) {
+      //publish to scoring code
+      targetDropOffPublish.publish(message->image);
+      targetDetected.data = -1;
+      
+      // Reached the center with target - return to the spiral
+      goalLocation = spiralPosition;
+      
+      std_msgs::String msg;
+      msg.data = "Goal x: " + boost::lexical_cast<std::string>(goalLocation.x) + ", " 
+	+ "y: " + boost::lexical_cast<std::string>(goalLocation.y) + ", "
+	+ "yaw: " + boost::lexical_cast<std::string>(goalLocation.theta) 
+	      + " Returning to spiral.";
+      infoLogPublisher.publish(msg);
+    }
+    
+  }
 
 	//if target has not previously been detected 
 	else if (targetDetected.data == -1) {
@@ -284,6 +341,15 @@ void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
 			//copy target ID to class variable
 			targetDetected.data = message->tags.data[0];
 			
+			// Remember where we were in the spiral
+			spiralPosition = goalLocation;
+			std_msgs::String msg;
+			msg.data = "Stored Spiral Position x: " + boost::lexical_cast<std::string>(goalLocation.x) + ", " 
+			  + "y: " + boost::lexical_cast<std::string>(goalLocation.y) + ", "
+			  + "yaw: " + boost::lexical_cast<std::string>(goalLocation.theta)
+			  + "Heading to nest";
+			infoLogPublisher.publish(msg);
+
 	        //set angle to center as goal heading
 			goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
 			
@@ -300,7 +366,8 @@ void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
 			//switch to transform state to trigger return to center
 			stateMachineState = STATE_MACHINE_TRANSFORM;
 		}
-    }
+	}
+
 }
 
 void modeHandler(const std_msgs::UInt8::ConstPtr& message) {
@@ -373,7 +440,7 @@ void joyCmdHandler(const sensor_msgs::Joy::ConstPtr& message) {
 void publishStatusTimerEventHandler(const ros::TimerEvent&)
 {
   std_msgs::String msg;
-  msg.data = "online";
+  msg.data = "DDSA";
   status_publisher.publish(msg);
 }
 
@@ -395,4 +462,33 @@ void sigintEventHandler(int sig)
 {
      // All the default sigint handler does is call shutdown()
      ros::shutdown();
+}
+
+// Determines the unique ID based on the rover name. Only for sim rovers.
+int roverNameToIndex( string roverName ) {
+
+    if (publishedName.compare("achilles") == 0)
+    {
+        return 0;
+    }
+    else if (publishedName.compare("aeneas") == 0)
+    {
+        return 1;
+    }
+    else if (publishedName.compare("ajax") == 0)
+    {
+        return 2;
+    }
+    else if (publishedName.compare("diomedes") == 0)
+    {
+        return 3;
+    }
+    else if (publishedName.compare("hector") == 0)
+    {
+        return 4;
+    }
+    else
+    {
+        return 5;
+    }
 }
