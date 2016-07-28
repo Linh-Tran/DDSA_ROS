@@ -1,6 +1,3 @@
-
-
-
 #include "DDSAController.h"
 #include <cmath>
 #include <algorithm>
@@ -13,15 +10,17 @@ DDSAController::DDSAController()
   x = 0;
   y = 0;
   initialized = false;
+  numOfPatternsGen = 0;
 }
 
 DDSAController::DDSAController( int num_circuits, int num_robots, int robot_index )
 {
-  step_length = 0.5; 
+  step_length = 0.5; // .5 meters
   x = 0;
   y = 0;
   initialized = false;
   generatePattern(num_circuits, num_robots, robot_index);
+  numOfPatternsGen = 0;
 }
 
 void DDSAController::setX(float x)
@@ -38,7 +37,7 @@ GoalState DDSAController::calcNextGoalState()
 {
   GoalState gs;
 
-   if (!initialized)
+  if (!initialized)
     {
       initialized = true;
       gs.x = 0;
@@ -71,9 +70,9 @@ GoalState DDSAController::calcNextGoalState()
   else
     {
       gs.dir = '0';
-      gs.x   = 0;
-      gs.y   = 0;
-      gs.yaw = 0;
+      gs.x   = '0';
+      gs.y   = '0';
+      gs.yaw = '0';
     }
 
   return gs;
@@ -210,6 +209,7 @@ void DDSAController::reversePattern (string ith_pattern)
 {
     copy(ith_pattern.begin(), ith_pattern.end(), back_inserter(pattern));
     reverse(pattern.begin(), pattern.end());
+    numOfPatternsGen++;//counts number of patterns generated so far.
 }
 
 string DDSAController::getPath()

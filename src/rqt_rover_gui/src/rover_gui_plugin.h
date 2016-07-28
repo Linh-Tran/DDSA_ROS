@@ -121,6 +121,7 @@ namespace rqt_rover_gui {
 
     // Detect rovers that are broadcasting information
     set<string> findConnectedRovers();
+    int totalConnectedRovers();
     
     //Image converter
 	image_u8_t *copy_image_data_into_u8_container(int width, int height, uint8_t *rgb, int stride);

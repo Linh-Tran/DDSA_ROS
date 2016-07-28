@@ -48,8 +48,6 @@ std_msgs::Int16 targetDetected; //ID of the detected target
 bool targetsCollected [256] = {0}; //array of booleans indicating whether each target ID has been found
 
 //DDSA Numeric Variables
-
-//mobility (package) rover (message type) rover (name of object of message that contains two members a bool MoveToNest and string roverName.
 mobility::rover rover; //used to published the rovers names and count the rovers.
 bool moveToNest = false;
 //std::priority_queue<string> roversQ;
@@ -195,9 +193,9 @@ int main(int argc, char **argv) {
 void mobilityStateMachine(const ros::TimerEvent&) {
   std_msgs::String stateMachineMsg;
 
-  //How accurate the rover turns are.
   float angle_tol = 0.01;
-  
+
+      
   if (currentMode == 2 || currentMode == 3 ) { //Robot is in automode
     ROS_INFO_STREAM("RUNNING");
     switch(stateMachineState) {
@@ -270,21 +268,17 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	//  + "yaw: " + boost::lexical_cast<std::string>(gs.yaw) + ", " 
 	//  + " Direction: " + gs.dir;
 	// infoLogPublisher.publish(msg2);
-	
 	string peekQ; 
-	//Handles the situation when the priority queue is empty
 	if (roversQ.empty()){
+
 	  peekQ = "mandy"; 
 	}
 	else{
 	  peekQ = roversQ.top();
 	}
-	
+	ROS_INFO_STREAM("Q: " << peekQ);
 	if (moveToNest == false && hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.1 && peekQ.compare(publishedName)== 0){
-	  
-	  //Each rover will wait for 5 seconds before going to the center.
-	  ros::Duration(5.0).sleep(); 
-	  
+	  ros::Duration(5.0).sleep(); //each rover will wait for 5 seconds before going to the center.
 	  //set center as goal position
 	  goalLocation.x = 0.0;
 	  goalLocation.y = 0.0;
@@ -293,24 +287,21 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	}
 	//Distance to the center is < 0.25 
 	else if (moveToNest == false && peekQ.compare(publishedName)== 0){
-	 
-	  // Makes are rover type of mobility class to tell the rover it is at the center
-	  mobility::rover roverUpdate; 
+	  mobility::rover roverUpdate; // use to tell the rover it is at the center
 	  moveToNest = true;
 	  roverUpdate.roverName = publishedName;
 	  roverUpdate.moveToNest = moveToNest;
-	  
-	  //Publish the name and the moveToNest status.
-	  roverCountPublish.publish(roverUpdate);
+	  roverCountPublish.publish(roverUpdate);//publish the name and the moveToNest status.
 	}
       
-	//Will be called once the rovers finish prioritizing movements to the center at the start
+	//
 	else if (moveToNest == true){
 	  // DDSA Controller needs to know the current location in order to calculate the next goal state
 	  ddsa_controller.setX(currentLocation.x);
 	  ddsa_controller.setY(currentLocation.y);
             
-	  //select new goal state that follows the spiral pattern			      
+	  //select new goal state that follows the spiral pattern
+				      
 	  GoalState gs = ddsa_controller.calcNextGoalState();
 	  goalLocation.theta = gs.yaw;
 	  goalLocation.x = gs.x;
@@ -327,7 +318,6 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	else{
 
 	  if( hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) < 1.5) {
-	    //The distance which the rovers move away from its starting position at the start of the stimulation.
 	    float radialDistance = 2*hypot(0.0-currentLocation.x, 0.0-currentLocation.y);
 	    goalLocation.theta = atan2(currentLocation.y, currentLocation.x);
 	    goalLocation.x = radialDistance*cos(goalLocation.theta);
@@ -338,9 +328,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	    // goalLocation.theta = atan2(0.0-currentLocation.y, 0.0-currentLocation.x);
 	    // goalLocation.x = currentLocation.x;
 	    // goalLocation.y = currentLocation.y;
-	   
-	    //Rovers stops when the rover is not in the priority queue.
-	    setVelocity(0.0, 0.0);
+	    setVelocity(0.0, 0.0);//rovers stops when the rover is not in the queue.
 	    ROS_INFO_STREAM("waiting");
 	    ROS_INFO_STREAM("moveToNest: " << moveToNest);
 	  }
@@ -509,6 +497,7 @@ void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
       targetDetected.data = -1;
         
       // Reached the center with target - return to the spiral
+
       std_msgs::String msg;
       msg.data = "Reached center";
       infoLogPublisher.publish(msg); 
@@ -626,6 +615,7 @@ void joyCmdHandler(const sensor_msgs::Joy::ConstPtr& message) {
   } 
 }
 
+
 void publishStatusTimerEventHandler(const ros::TimerEvent&)
 {
   std_msgs::String msg;
@@ -653,12 +643,12 @@ void sigintEventHandler(int sig)
   ros::shutdown();
 }
 
-//Pop each rover who finshes moving to the nest at the start of the algorihtm
-//And counts the number of rovers runnning in stimulation.
 void roverCountHandler(const mobility::rover& message)
 {
   if(message.moveToNest == false){
     roversQ.push(message.roverName);
+    //ROS_INFO_STREAM("publishedName: " << publishedName);
+    //ROS_INFO_STREAM("roversQSize: " << roversQ.size());
     numberOfRovers++;
   }
   else{
@@ -668,10 +658,9 @@ void roverCountHandler(const mobility::rover& message)
 
 void roverCountTimerEventHandler(const ros::TimerEvent& event)
 {
-  //Prints out the priority queue in which the rovers are expected to head to the center at the start of algorithm.
+  //std::queue<string> roversQTemp = roversQ;
   std::priority_queue<string, std::vector<string>, std::greater<string> > roversQTemp = roversQ;
   string rovers;
- 
   rovers += "(";
   ROS_INFO_STREAM("roversQSize: " << roversQTemp.size());
   while(!roversQTemp.empty()){
@@ -681,11 +670,9 @@ void roverCountTimerEventHandler(const ros::TimerEvent& event)
   rovers += ")";
   ROS_INFO_STREAM("Qorder: " << rovers);
 
-  //Calls the ddsa controller to generate the pattern (circuits, rovers, robot ID).
-  ddsa_controller.generatePattern(4, numberOfRovers, robotNumber);
+  //roversQ.push("ZZZZ");
+  ddsa_controller.generatePattern(6, numberOfRovers, robotNumber);
   std_msgs::String msg;
-
-  //Publishes the pattern for each rover.
   msg.data = "Spiral Pattern: " + ddsa_controller.getPath();
   infoLogPublisher.publish(msg);
       

@@ -24,6 +24,8 @@ class DDSAController
   std::string getPath();
  
   ~DDSAController();
+
+  int numOfPatternsGen;
   
  private:
 

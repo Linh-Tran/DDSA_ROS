@@ -329,7 +329,7 @@ void RoverGUIPlugin::GPSEventHandler(const ros::MessageEvent<const nav_msgs::Odo
      ui.camera_frame->setImage(qimg);
  }
 
-set<string> RoverGUIPlugin::findConnectedRovers()
+set<string> RoverGUIPlugin::findConnectedRovers()  
 {
     set<string> rovers;
 
@@ -356,7 +356,7 @@ set<string> RoverGUIPlugin::findConnectedRovers()
             }
         }
     }
-
+    
     return rovers;
 }
 
@@ -577,7 +577,11 @@ void RoverGUIPlugin::currentRoverChangedEventHandler(QListWidgetItem *current, Q
 void RoverGUIPlugin::pollRoversTimerEventHandler()
 {
     set<string>new_rover_names = findConnectedRovers();
-
+    /*for(set<string>::iterator it = new_rover_names.begin(); it != new_rover_names.end(); it++)
+    {
+        ROS_INFO("LT rovers:: %s", *it);
+    }*/
+   // ROS_INFO_STREAM( "LT rovers:: %s", new_rover_names); 
 
     std::set<string> orphaned_rover_names;
 
@@ -1094,7 +1098,7 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
     sim_mgr.addModel("collection_disk", "collection_disk", 0, 0, 0, collection_disk_radius);
 
     int n_rovers_created = 0;
-    int n_rovers = 3;
+    int n_rovers = 1;
     if (ui.final_radio_button->isChecked()) n_rovers = 6;
 
     QProgressDialog progress_dialog;
@@ -1113,6 +1117,7 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
     return_msg = sim_mgr.startRoverNode("achilles");
     emit sendInfoLogMessage(return_msg);
 
+   
     progress_dialog.setValue((++n_rovers_created)*100.0f/n_rovers);
     qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
 
@@ -1131,9 +1136,11 @@ void RoverGUIPlugin::buildSimulationButtonEventHandler()
     return_msg = sim_mgr.addRover("ajax", 1, 0, 0);
     emit sendInfoLogMessage(return_msg);
 
-   emit sendInfoLogMessage("Starting rover node for ajax...");
-   return_msg = sim_mgr.startRoverNode("ajax");
-   emit sendInfoLogMessage(return_msg);
+    emit sendInfoLogMessage("Starting rover node for ajax...");
+    return_msg = sim_mgr.startRoverNode("ajax");
+    emit sendInfoLogMessage(return_msg);
+    
+    
 
    progress_dialog.setValue((++n_rovers_created)*100.0f/n_rovers);
    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);

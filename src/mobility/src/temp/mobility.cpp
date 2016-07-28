@@ -9,7 +9,6 @@
 #include <std_msgs/Int16.h>
 #include <std_msgs/UInt8.h>
 #include <std_msgs/String.h>
-#include <std_msgs/Bool.h>
 #include <sensor_msgs/Joy.h>
 #include <sensor_msgs/Range.h>
 #include <geometry_msgs/Pose2D.h>
@@ -18,15 +17,11 @@
 
 //Custom messages
 #include <shared_messages/TagsImage.h>
-#include "mobility/rover.h" 
 
 // To handle shutdown signals so the node quits properly in response to "rosnode kill"
 #include <ros/ros.h>
 #include <signal.h>
 
-#include <queue>
-#include <stack>
-#include <string>
 #include "DDSAController.h"
 
 using namespace std;
@@ -46,14 +41,6 @@ float status_publish_interval = 5;
 float killSwitchTimeout = 10;
 std_msgs::Int16 targetDetected; //ID of the detected target
 bool targetsCollected [256] = {0}; //array of booleans indicating whether each target ID has been found
-
-//DDSA Numeric Variables
-
-//mobility (package) rover (message type) rover (name of object of message that contains two members a bool MoveToNest and string roverName.
-mobility::rover rover; //used to published the rovers names and count the rovers.
-bool moveToNest = false;
-//std::priority_queue<string> roversQ;
-std::priority_queue<string, std::vector<string>, std::greater<string> > roversQ;
 int numberOfRovers = 0; //count the number of rovers running
 int robotNumber;
 
@@ -108,16 +95,18 @@ void mobilityStateMachine(const ros::TimerEvent&);
 void publishStatusTimerEventHandler(const ros::TimerEvent& event);
 void targetsCollectedHandler(const std_msgs::Int16::ConstPtr& message);
 void killSwitchTimerEventHandler(const ros::TimerEvent& event);
-void roverCountHandler(const mobility::rover& message);
+void roverCountHandler(const std_msgs::String::ConstPtr& message);
 void roverCountTimerEventHandler(const ros::TimerEvent& event);
 void roverPatternDelayTimerEventHandler(const ros::TimerEvent& event);
 
 // Utility functions
 int roverNameToIndex(string name);
-
+bool startGenerating = false;
 // Create the DDSA Controller
 DDSAController ddsa_controller;
 geometry_msgs::Pose2D spiralPosition;
+std_msgs::String counterStatus;
+
 
 int main(int argc, char **argv) {
 
@@ -126,24 +115,26 @@ int main(int argc, char **argv) {
 
   rng = new random_numbers::RandomNumberGenerator(); //instantiate random number generator
   //goalLocation.theta = rng->uniformReal(0, 2 * M_PI); //set initial random heading
-      
+    
   targetDetected.data = -1; //initialize target detected
-      
+    
   //select initial search position 50 cm from center (0,0)
   //  goalLocation.x = 0.5 * cos(goalLocation.theta);
   //	  goalLocation.y = 0.5 * sin(goalLocation.theta);
 
-  //goalLocation.theta = atan2(0-currentLocation.y, 0-currentLocation.x);
+  // goalLocation.theta = 0;
+  // goalLocation.x = 0;
+  // goalLocation.y = 0;
+  // goalLocation.theta = atan2(0-currentLocation.y, 0-currentLocation.x);
+    
+  if (hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.5) {
+    //set angle to center as goal heading
+    goalLocation.theta = 0;
       
-  // if (hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.5) {
-  //   //set angle to center as goal heading
-  //   goalLocation.theta = atan2(0-currentLocation.y, 0-currentLocation.x);
-          
-  //   //set center as goal position
-  //   goalLocation.x = 0.0;
-  //   goalLocation.y = 0.0;
-  // }
-
+    //set center as goal position
+    goalLocation.x = 0.0;
+    goalLocation.y = 0.0;
+  }
   if (argc >= 2) {
     publishedName = argv[1];
     cout << "Welcome to the world of tomorrow " << publishedName << "!  Mobility module started." << endl;
@@ -175,31 +166,34 @@ int main(int argc, char **argv) {
   fingerAnglePublish = mNH.advertise<std_msgs::Int16>((publishedName + "/fingerAngle"), 1, true);
   wristAnglePublish = mNH.advertise<std_msgs::Int16>((publishedName + "/wristAngle"), 1, true);
   infoLogPublisher = mNH.advertise<std_msgs::String>("/infoLog", 1, true);
-  roverCountPublish = mNH.advertise<mobility::rover>("/numberofrovers",10,true);
+  roverCountPublish = mNH.advertise<std_msgs::String>("/numberofrovers",10,true);
 
   publish_status_timer = mNH.createTimer(ros::Duration(status_publish_interval), publishStatusTimerEventHandler);
   //killSwitchTimer = mNH.createTimer(ros::Duration(killSwitchTimeout), killSwitchTimerEventHandler);
   stateMachineTimer = mNH.createTimer(ros::Duration(mobilityLoopTimeStep), mobilityStateMachine);
     
-  rover.moveToNest = false;
-  rover.roverName = publishedName;
-  roverCountPublish.publish(rover);
-  roverCountTimer = mNH.createTimer(ros::Duration(10.0), roverCountTimerEventHandler, true);
+  std_msgs::String roverName;
+        
+  roverName.data = publishedName;
+  roverCountPublish.publish(roverName);
+  //roverCountTimer = mNH.createTimer(ros::Duration(3.0), roverCountTimerEventHandler, true);
   robotNumber = roverNameToIndex(publishedName);
 
+
+    
   ros::spin();
-      
+    
   return EXIT_SUCCESS;
 }
 
 void mobilityStateMachine(const ros::TimerEvent&) {
   std_msgs::String stateMachineMsg;
 
-  //How accurate the rover turns are.
   float angle_tol = 0.01;
-  
-  if (currentMode == 2 || currentMode == 3 ) { //Robot is in automode
-    ROS_INFO_STREAM("RUNNING");
+
+    
+  if (currentMode == 2 || currentMode == 3 && numberOfRovers == ddsa_controller.numOfPatternsGen ) { //Robot is in automode
+      
     switch(stateMachineState) {
 	
       //Select rotation or translation based on required adjustment
@@ -220,7 +214,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	if (hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.5) {
 	  //set angle to center as goal heading
 	  goalLocation.theta = M_PI + atan2(currentLocation.y, currentLocation.x);
-					    
+					  
 	  //set center as goal position
 	  goalLocation.x = 0.0;
 	  goalLocation.y = 0.0;
@@ -239,7 +233,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
       }
       //Otherwise, assign a new goal
       else {
-   				  
+				  
 	// float diff_x = currentLocation.x - goalLocation.x;
 	// float diff_y = currentLocation.y - goalLocation.y;
 	// float diff_x2 = diff_x*diff_x;
@@ -253,99 +247,23 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 	//   + boost::lexical_cast<std::string>(sqrt(diff_x2+diff_y2));
 	// infoLogPublisher.publish(msg);
 
-	// // DDSA Controller needs to know the current location in order to calculate the next goal statet
-	// ddsa_controller.setX(currentLocation.x);
-	// ddsa_controller.setY(currentLocation.y);
-            
-	// //select new goal state that follows the spiral pattern
-				      
-	// GoalState gs = ddsa_controller.calcNextGoalState();
-	// goalLocation.theta = gs.yaw;
-	// goalLocation.x = gs.x;
-	// goalLocation.y = gs.y;
+	// DDSA Controller needs to know the current location in order to calculate the next goal state
+	ddsa_controller.setX(currentLocation.x);
+	ddsa_controller.setY(currentLocation.y);
+          
+	//select new goal state that follows the spiral pattern
 				    
+	GoalState gs = ddsa_controller.calcNextGoalState();
+	goalLocation.theta = gs.yaw;
+	goalLocation.x = gs.x;
+	goalLocation.y = gs.y;
+				  
 	// std_msgs::String msg2; 
 	// msg2.data = "x: " + boost::lexical_cast<std::string>(gs.x) + ", " 
 	//  + "y: " + boost::lexical_cast<std::string>(gs.y) + ", "
 	//  + "yaw: " + boost::lexical_cast<std::string>(gs.yaw) + ", " 
 	//  + " Direction: " + gs.dir;
 	// infoLogPublisher.publish(msg2);
-	
-	string peekQ; 
-	//Handles the situation when the priority queue is empty
-	if (roversQ.empty()){
-	  peekQ = "mandy"; 
-	}
-	else{
-	  peekQ = roversQ.top();
-	}
-	
-	if (moveToNest == false && hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.1 && peekQ.compare(publishedName)== 0){
-	  
-	  //Each rover will wait for 5 seconds before going to the center.
-	  ros::Duration(5.0).sleep(); 
-	  
-	  //set center as goal position
-	  goalLocation.x = 0.0;
-	  goalLocation.y = 0.0;
-	  goalLocation.theta = atan2(0.0-currentLocation.y, 0.0-currentLocation.x);
-
-	}
-	//Distance to the center is < 0.25 
-	else if (moveToNest == false && peekQ.compare(publishedName)== 0){
-	 
-	  // Makes are rover type of mobility class to tell the rover it is at the center
-	  mobility::rover roverUpdate; 
-	  moveToNest = true;
-	  roverUpdate.roverName = publishedName;
-	  roverUpdate.moveToNest = moveToNest;
-	  
-	  //Publish the name and the moveToNest status.
-	  roverCountPublish.publish(roverUpdate);
-	}
-      
-	//Will be called once the rovers finish prioritizing movements to the center at the start
-	else if (moveToNest == true){
-	  // DDSA Controller needs to know the current location in order to calculate the next goal state
-	  ddsa_controller.setX(currentLocation.x);
-	  ddsa_controller.setY(currentLocation.y);
-            
-	  //select new goal state that follows the spiral pattern			      
-	  GoalState gs = ddsa_controller.calcNextGoalState();
-	  goalLocation.theta = gs.yaw;
-	  goalLocation.x = gs.x;
-	  goalLocation.y = gs.y;
-	
-	  std_msgs::String msg;
-	  msg.data = "x: " + boost::lexical_cast<std::string>(goalLocation.x) + ", " 
-	    + "y: " + boost::lexical_cast<std::string>(goalLocation.y) + ", "
-	    + "theta: " + boost::lexical_cast<std::string>(goalLocation.theta);
-	  + "dir: " + boost::lexical_cast<std::string>(gs.dir);
-	  infoLogPublisher.publish(msg);
-	
-	}
-	else{
-
-	  if( hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) < 1.5) {
-	    //The distance which the rovers move away from its starting position at the start of the stimulation.
-	    float radialDistance = 2*hypot(0.0-currentLocation.x, 0.0-currentLocation.y);
-	    goalLocation.theta = atan2(currentLocation.y, currentLocation.x);
-	    goalLocation.x = radialDistance*cos(goalLocation.theta);
-	    goalLocation.y = radialDistance*sin(goalLocation.theta);
-	  }
-	  else{	 
-	    //rovers will face the center once they moved radialDistance away.
-	    // goalLocation.theta = atan2(0.0-currentLocation.y, 0.0-currentLocation.x);
-	    // goalLocation.x = currentLocation.x;
-	    // goalLocation.y = currentLocation.y;
-	   
-	    //Rovers stops when the rover is not in the priority queue.
-	    setVelocity(0.0, 0.0);
-	    ROS_INFO_STREAM("waiting");
-	    ROS_INFO_STREAM("moveToNest: " << moveToNest);
-	  }
-	}
-	
       }
     }
 				
@@ -366,7 +284,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 
       float command_vel = p_k*angle_error;
       if (fabs(angle_error) > angle_tol) {
-          
+        
 	// std_msgs::String msg;
 	// msg.data = "Angle Error: " + boost::lexical_cast<std::string>(angle_error)
 	// + ", Unknown Angle Error: " + boost::lexical_cast<std::string>(unknown_angle_error) 
@@ -375,21 +293,20 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 
 	setVelocity(0.0, command_vel); //rotate
       }
-		    
+		  
       /*else if (fabs(angle_error) < -angle_tol){
 	setVelocity(0.0, -command_vel);
 	}*/
 		
       else {
-		      
+		    
 	//std_msgs::String msg;
 	//msg.data = "Desired Angle Reached: " + boost::lexical_cast<std::string>(angle_error);
 	//infoLogPublisher.publish(msg);
-		      
+		    
 	setVelocity(0.0, 0.0); //stop
-	ROS_INFO_STREAM("inside rotate: " << publishedName);
 	stateMachineState = STATE_MACHINE_TRANSLATE; //move to translate step
-		      
+		    
       }
       break;
     }
@@ -404,60 +321,12 @@ void mobilityStateMachine(const ros::TimerEvent&) {
       }
       else {
 	setVelocity(0.0, 0.0); //stop
-	ROS_INFO_STREAM("inside translate: " << publishedName);
 	stateMachineState = STATE_MACHINE_TRANSFORM; //move back to transform step
 					
       }
       break;
     }
-     
-      /*  case STATE_MACHINE_NEST: {
-    
-	  stateMachineMsg.data = "MOVING TO NEST";
-	  string peekQ = roversQ.top();
-	  if (moveToNest.data == false && hypot(0.0 - currentLocation.x, 0.0 - currentLocation.y) > 0.05 && peekQ.compare(publishedName)== 0){
-	  //set center as goal position
-	  goalLocation.x = 0.0;
-	  goalLocation.y = 0.0;
-	  goalLocation.theta = atan2(0-currentLocation.y, 0-currentLocation.x);
-
-	  
-	  }
-	  //Distance to the center is < 0.05 
-	  else if (moveToNest.data == false && peekQ.compare(publishedName)== 0){
-	  moveToNest.data = true;
-	  roversQ.pop();
-	  }
-      
-	  //
-	  else if (moveToNest.data == true){
-	  // DDSA Controller needs to know the current location in order to calculate the next goal state
-	  ddsa_controller.setX(currentLocation.x);
-	  ddsa_controller.setY(currentLocation.y);
-            
-	  //select new goal state that follows the spiral pattern
-				      
-	  GoalState gs = ddsa_controller.calcNextGoalState();
-	  goalLocation.theta = gs.yaw;
-	  goalLocation.x = gs.x;
-	  goalLocation.y = gs.y;
-	
-	  std_msgs::String msg;
-	  msg.data = "x: " + boost::lexical_cast<std::string>(goalLocation.x) + ", " 
-	  + "y: " + boost::lexical_cast<std::string>(goalLocation.y) + ", "
-	  + "theta: " + boost::lexical_cast<std::string>(goalLocation.theta);
-	  infoLogPublisher.publish(msg);
-
-	  }
-	  else{
-	  setVelocity(0.0, 0.0);
-	  stateMachineMsg.data = "WAITING";
-	  ROS_INFO_STREAM("Waiting");
-	  }
-	  stateMachineState = STATE_MACHINE_TRANSFORM;
-	  break;
-	  }*/
-   
+		
     default: {
       break;
     }
@@ -468,6 +337,23 @@ void mobilityStateMachine(const ros::TimerEvent&) {
 
     // publish current state for the operator to see
     stateMachineMsg.data = "WAITING";
+    if(!startGenerating){
+      ddsa_controller.generatePattern(6, numberOfRovers, robotNumber);
+      std_msgs::String msg;
+      msg.data = "Spiral Pattern: " + ddsa_controller.getPath();
+      infoLogPublisher.publish(msg);
+      startGenerating = true;
+	     
+    }
+
+    if (numberOfRovers != ddsa_controller.numOfPatternsGen){ 
+      counterStatus.data = "Still waiting for patterns to generate"; 
+      infoLogPublish.publish(counterStatus);
+    }
+    else{
+      counterStatus.data = "Finished generating patterns";
+      infoLogPublish.publish(counterStatus);
+    }
 	
   }
 
@@ -475,7 +361,7 @@ void mobilityStateMachine(const ros::TimerEvent&) {
   if (strcmp(stateMachineMsg.data.c_str(), prev_state_machine) != 0) {
 
     //infoLogPublisher.publish(stateMachineMsg);
-        
+      
     stateMachinePublish.publish(stateMachineMsg);
     sprintf(prev_state_machine, "%s", stateMachineMsg.data.c_str());
   }
@@ -488,7 +374,7 @@ void setVelocity(double linearVel, double angularVel)
   // the rover's kill switch wont be called.
   killSwitchTimer.stop();
   killSwitchTimer.start();
-    
+  
   velocity.linear.x = linearVel * 1.5;
   velocity.angular.z = angularVel * 8; //scaling factor for sim; removed by aBridge node
   velocityPublish.publish(velocity);
@@ -507,8 +393,9 @@ void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
       //publish to scoring code
       targetDropOffPublish.publish(message->image);
       targetDetected.data = -1;
-        
+      
       // Reached the center with target - return to the spiral
+
       std_msgs::String msg;
       msg.data = "Reached center";
       infoLogPublisher.publish(msg); 
@@ -519,12 +406,13 @@ void targetHandler(const shared_messages::TagsImage::ConstPtr& message) {
 	+ "yaw: " + boost::lexical_cast<std::string>(goalLocation.theta) 
 	+ " Returning to spiral.";
       infoLogPublisher.publish(msg);
-    }     
+    }
+    
   }
 
   //if target has not previously been detected 
   else if (targetDetected.data == -1) {
-          
+        
     //check if target has not yet been collected
     if (!targetsCollected[message->tags.data[0]]) {
       //copy target ID to class variable
@@ -626,6 +514,7 @@ void joyCmdHandler(const sensor_msgs::Joy::ConstPtr& message) {
   } 
 }
 
+
 void publishStatusTimerEventHandler(const ros::TimerEvent&)
 {
   std_msgs::String msg;
@@ -653,42 +542,18 @@ void sigintEventHandler(int sig)
   ros::shutdown();
 }
 
-//Pop each rover who finshes moving to the nest at the start of the algorihtm
-//And counts the number of rovers runnning in stimulation.
-void roverCountHandler(const mobility::rover& message)
+void roverCountHandler(const std_msgs::String::ConstPtr& message)
 {
-  if(message.moveToNest == false){
-    roversQ.push(message.roverName);
-    numberOfRovers++;
-  }
-  else{
-    roversQ.pop();
-  }
+  numberOfRovers++;
 }
 
 void roverCountTimerEventHandler(const ros::TimerEvent& event)
 {
-  //Prints out the priority queue in which the rovers are expected to head to the center at the start of algorithm.
-  std::priority_queue<string, std::vector<string>, std::greater<string> > roversQTemp = roversQ;
-  string rovers;
- 
-  rovers += "(";
-  ROS_INFO_STREAM("roversQSize: " << roversQTemp.size());
-  while(!roversQTemp.empty()){
-    rovers += roversQTemp.top() + ", ";
-    roversQTemp.pop();
-  }   
-  rovers += ")";
-  ROS_INFO_STREAM("Qorder: " << rovers);
-
-  //Calls the ddsa controller to generate the pattern (circuits, rovers, robot ID).
-  ddsa_controller.generatePattern(4, numberOfRovers, robotNumber);
+  ddsa_controller.generatePattern(6, numberOfRovers, robotNumber);
   std_msgs::String msg;
-
-  //Publishes the pattern for each rover.
   msg.data = "Spiral Pattern: " + ddsa_controller.getPath();
   infoLogPublisher.publish(msg);
-      
+    
 }
 // Determines the unique ID based on the rover name. Only for sim rovers.
 int roverNameToIndex( string roverName ) {
@@ -712,3 +577,12 @@ int roverNameToIndex( string roverName ) {
     return 5;
   }
 }
+
+/*bool doneGeneratingPatterns()
+  {
+  bool done = false;
+  if(numberOfRovers == ddsa_controller.numOfPatternsGen){
+  notDone = true;
+  }
+  return done;
+  }*/

@@ -1,0 +1,2 @@
+string roverName
+bool   moveToNest
